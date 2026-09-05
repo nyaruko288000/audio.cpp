@@ -13,10 +13,11 @@ jobs:
 
       - name: Apply MeanVC2 Slim & Baked-Embedding Patch
         run: |
-          python3 - << 'EOF'
-          import sys
+          # 1. 彻底移除 CMakeLists.txt 中的 -pedantic-errors，避免 NDK 头文件警告被强制升级为错误
+          sed -i 's/-pedantic-errors//g' CMakeLists.txt
 
-          # 1. Patch assets.cpp: 允许缺失 speaker_wavlm / speaker_ecapa
+          python3 - << 'EOF'
+          # 2. Patch assets.cpp: 允许缺失 speaker_wavlm / speaker_ecapa
           assets_path = "src/models/meanvc2/assets.cpp"
           with open(assets_path, "r", encoding="utf-8") as f:
               content = f.read()
@@ -37,15 +38,12 @@ jobs:
               with open(assets_path, "w", encoding="utf-8") as f:
                   f.write(content)
               print("✓ Successfully patched assets.cpp")
-          else:
-              print("! Warning: target code not found in assets.cpp, check upstream changes")
 
-          # 2. Patch session.cpp: 支持免 WavLM / 使用内置 speaker_embedding
+          # 3. Patch session.cpp: 支持内置 speaker_embedding 且自包含 kSpeakerDim
           session_path = "src/models/meanvc2/session.cpp"
           with open(session_path, "r", encoding="utf-8") as f:
               s_content = f.read()
 
-          # (a) 构造函数中仅在权重存在时初始化 speaker_encoder_
           target_init = """    speaker_encoder_ = std::make_unique<MeanVC2SpeakerEncoderRuntime>(
                   assets_->speaker_wavlm_weights,
                   assets_->speaker_ecapa_weights,
@@ -61,12 +59,12 @@ jobs:
               }"""
           s_content = s_content.replace(target_init, patched_init)
 
-          # (b) 插入解析 speaker_embedding 的辅助函数
           helper_func = """
           static std::vector<float> resolve_meanvc2_speaker_embedding(
               MeanVC2SpeakerEncoderRuntime * encoder,
               const MeanVC2Assets & assets,
               const runtime::TaskRequest & request) {
+              constexpr int64_t kSpeakerDim = 256;
               if (assets.flow_weights != nullptr && assets.flow_weights->has_tensor("speaker_embedding")) {
                   return assets.flow_weights->require_f32("speaker_embedding", {kSpeakerDim});
               }
@@ -79,7 +77,6 @@ jobs:
           """
           s_content = s_content.replace("namespace {", "namespace {" + helper_func, 1)
 
-          # (c) 在 start_stream 中替换
           target_stream_embed = """    if (!request.voice.has_value() ||
                   !request.voice->speaker.has_value() ||
                   !request.voice->speaker->audio.has_value()) {
@@ -102,7 +99,6 @@ jobs:
               streaming_speaker_embedding_ = resolve_meanvc2_speaker_embedding(speaker_encoder_.get(), *assets_, request);"""
           s_content = s_content.replace(target_stream_embed, patched_stream_embed)
 
-          # (d) 在 convert 中替换
           target_convert_check = """    if (!request.voice.has_value() ||
                   !request.voice->speaker.has_value() ||
                   !request.voice->speaker->audio.has_value()) {
