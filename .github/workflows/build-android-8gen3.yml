@@ -1,0 +1,187 @@
+name: Build audio.cpp for 8Gen3 (Slim MeanVC2, No WavLM)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-optimized:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Apply MeanVC2 Slim & Baked-Embedding Patch
+        run: |
+          python3 - << 'EOF'
+          import sys
+
+          # 1. Patch assets.cpp: 允许缺失 speaker_wavlm / speaker_ecapa
+          assets_path = "src/models/meanvc2/assets.cpp"
+          with open(assets_path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          target_assets_code = """    assets->speaker_wavlm_weights = assets->resources.open_tensor_source("speaker_wavlm");
+              assets->speaker_ecapa_weights = assets->resources.open_tensor_source("speaker_ecapa");"""
+          
+          patched_assets_code = """    try {
+                  assets->speaker_wavlm_weights = assets->resources.open_tensor_source("speaker_wavlm");
+                  assets->speaker_ecapa_weights = assets->resources.open_tensor_source("speaker_ecapa");
+              } catch (...) {
+                  assets->speaker_wavlm_weights = nullptr;
+                  assets->speaker_ecapa_weights = nullptr;
+              }"""
+
+          if target_assets_code in content:
+              content = content.replace(target_assets_code, patched_assets_code)
+              with open(assets_path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("✓ Successfully patched assets.cpp")
+          else:
+              print("! Warning: target code not found in assets.cpp, check upstream changes")
+
+          # 2. Patch session.cpp: 支持免 WavLM / 使用内置 speaker_embedding
+          session_path = "src/models/meanvc2/session.cpp"
+          with open(session_path, "r", encoding="utf-8") as f:
+              s_content = f.read()
+
+          # (a) 构造函数中仅在权重存在时初始化 speaker_encoder_
+          target_init = """    speaker_encoder_ = std::make_unique<MeanVC2SpeakerEncoderRuntime>(
+                  assets_->speaker_wavlm_weights,
+                  assets_->speaker_ecapa_weights,
+                  execution_context_,
+                  assets::TensorStorageType::Native);"""
+          
+          patched_init = """    if (assets_->speaker_wavlm_weights != nullptr && assets_->speaker_ecapa_weights != nullptr) {
+                  speaker_encoder_ = std::make_unique<MeanVC2SpeakerEncoderRuntime>(
+                      assets_->speaker_wavlm_weights,
+                      assets_->speaker_ecapa_weights,
+                      execution_context_,
+                      assets::TensorStorageType::Native);
+              }"""
+          s_content = s_content.replace(target_init, patched_init)
+
+          # (b) 插入解析 speaker_embedding 的辅助函数
+          helper_func = """
+          static std::vector<float> resolve_meanvc2_speaker_embedding(
+              MeanVC2SpeakerEncoderRuntime * encoder,
+              const MeanVC2Assets & assets,
+              const runtime::TaskRequest & request) {
+              if (assets.flow_weights != nullptr && assets.flow_weights->has_tensor("speaker_embedding")) {
+                  return assets.flow_weights->require_f32("speaker_embedding", {kSpeakerDim});
+              }
+              if (encoder != nullptr && request.voice.has_value() &&
+                  request.voice->speaker.has_value() && request.voice->speaker->audio.has_value()) {
+                  return encoder->embed(*request.voice->speaker->audio);
+              }
+              throw std::runtime_error("MeanVC2 requires either an embedded speaker_embedding in GGUF or --voice-ref audio");
+          }
+          """
+          s_content = s_content.replace("namespace {", "namespace {" + helper_func, 1)
+
+          # (c) 在 start_stream 中替换
+          target_stream_embed = """    if (!request.voice.has_value() ||
+                  !request.voice->speaker.has_value() ||
+                  !request.voice->speaker->audio.has_value()) {
+                  throw std::runtime_error("MeanVC2 streaming requires --voice-ref target speaker audio");
+              }
+              reset();
+              streaming_request_ = request;
+              streaming_request_.audio_input = std::nullopt;
+              frontend_.reset();
+              bn_adapter_.reset();
+              asr_encoder_->reset();
+              streaming_speaker_embedding_ = speaker_encoder_->embed(*request.voice->speaker->audio);"""
+
+          patched_stream_embed = """    reset();
+              streaming_request_ = request;
+              streaming_request_.audio_input = std::nullopt;
+              frontend_.reset();
+              bn_adapter_.reset();
+              asr_encoder_->reset();
+              streaming_speaker_embedding_ = resolve_meanvc2_speaker_embedding(speaker_encoder_.get(), *assets_, request);"""
+          s_content = s_content.replace(target_stream_embed, patched_stream_embed)
+
+          # (d) 在 convert 中替换
+          target_convert_check = """    if (!request.voice.has_value() ||
+                  !request.voice->speaker.has_value() ||
+                  !request.voice->speaker->audio.has_value()) {
+                  throw std::runtime_error("MeanVC2 requires --voice-ref target speaker audio");
+              }"""
+          s_content = s_content.replace(target_convert_check, "// [patched: voice-ref check bypassed]")
+
+          target_convert_embed = """    const auto speaker_embedding = speaker_encoder_->embed(*request.voice->speaker->audio);"""
+          patched_convert_embed = """    const auto speaker_embedding = resolve_meanvc2_speaker_embedding(speaker_encoder_.get(), *assets_, request);"""
+          s_content = s_content.replace(target_convert_embed, patched_convert_embed)
+
+          with open(session_path, "w", encoding="utf-8") as f:
+              f.write(s_content)
+          print("✓ Successfully patched session.cpp")
+          EOF
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+
+      - name: Configure CMake for Snapdragon 8 Gen 3
+        run: |
+          NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
+          if [ -z "$NDK_PATH" ]; then
+            NDK_PATH="$ANDROID_NDK_HOME"
+          fi
+
+          ARM_FLAGS="-march=armv8.2-a+fp16+dotprod+i8mm -O3 -fvectorize -Wno-error=pedantic"
+
+          cmake -S . -B build-8gen3 \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_PATH/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="$ARM_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$ARM_FLAGS" \
+            -DENGINE_ENABLE_OPENMP=ON \
+            -DGGML_OPENMP=ON \
+            -DGGML_ARM_NEON=ON \
+            -DGGML_ARM_FP16=ON \
+            -DENGINE_ENABLE_CUDA=OFF \
+            -DENGINE_ENABLE_HIP=OFF \
+            -DENGINE_ENABLE_METAL=OFF \
+            -DENGINE_ENABLE_VULKAN=OFF \
+            -DENGINE_ENABLE_LLAMAFILE=OFF \
+            -DENGINE_ENABLE_NATIVE_CPU=OFF \
+            -DAUDIOCPP_MODEL_SET=custom \
+            -DAUDIOCPP_MODELS=meanvc2 \
+            -DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER=OFF \
+            -DENGINE_BUILD_TESTS=OFF \
+            -DENGINE_BUILD_EXAMPLES=OFF \
+            -DENGINE_BUILD_WARMBENCH=OFF
+
+      - name: Build audiocpp_cli
+        run: |
+          cmake --build build-8gen3 --target audiocpp_cli --verbose
+
+      - name: Collect Artifacts
+        run: |
+          mkdir -p dist
+          cp build-8gen3/bin/audiocpp_cli dist/
+          NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
+          if [ -z "$NDK_PATH" ]; then
+            NDK_PATH="$ANDROID_NDK_HOME"
+          fi
+          find "$NDK_PATH" -name "libomp.so" | grep "aarch64" | head -n 1 | xargs -I {} cp {} dist/
+          ls -lh dist/
+
+      - name: Upload 8Gen3 Slim Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: audiocpp_8gen3_slim
+          path: dist/
