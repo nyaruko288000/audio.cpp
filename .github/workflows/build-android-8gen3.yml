@@ -114,28 +114,29 @@ jobs:
               f.write(s_content)
           print("✓ Successfully patched session.cpp")
 
-          # 4. 严格使用正则将 MeanVC2 升级为 3 步推理，并保证两处参数绝对对齐
+          # 4. 严格使用正则将 MeanVC2 升级为 4 步高精度推理
           import re
           flow_path = "src/models/meanvc2/flow_sampler_runtime.cpp"
           with open(flow_path, "r", encoding="utf-8") as f:
               fc = f.read()
 
-          # 1. 替换 key.schedule_steps（使用正则，不论空格缩进）
-          fc, count1 = re.subn(r'key\.schedule_steps\s*=\s*\d+;', 'key.schedule_steps = 3;', fc)
+          # 1. 替换采样图步骤数为 4
+          fc, count1 = re.subn(r'key\.schedule_steps\s*=\s*\d+;', 'key.schedule_steps = 4;', fc)
           assert count1 == 1, f"schedule_steps 替换失败，匹配数量: {count1}"
 
-          # 2. 替换 config.schedule 列表（使用正则整体捕获）
-          schedule_3steps = """config.schedule = {
-                  {0, 1.0F, 2.0F / 3.0F, 0.0F, 0.0F},
-                  {1, 2.0F / 3.0F, 1.0F / 3.0F, 0.0F, 0.0F},
-                  {2, 1.0F / 3.0F, 0.0F, 0.0F, 0.0F},
+          # 2. 替换为 4 步时间积分表 (dt=0.25)
+          schedule_4steps = """config.schedule = {
+                  {0, 1.0F, 0.75F, 0.0F, 0.0F},
+                  {1, 0.75F, 0.5F, 0.0F, 0.0F},
+                  {2, 0.5F, 0.25F, 0.0F, 0.0F},
+                  {3, 0.25F, 0.0F, 0.0F, 0.0F},
               };"""
-          fc, count2 = re.subn(r'config\.schedule\s*=\s*\{[^;]+?\};', schedule_3steps, fc)
+          fc, count2 = re.subn(r'config\.schedule\s*=\s*\{[^;]+?\};', schedule_4steps, fc)
           assert count2 == 1, f"config.schedule 替换失败，匹配数量: {count2}"
 
           with open(flow_path, "w", encoding="utf-8") as f:
               f.write(fc)
-          print("✓ 成功升级 MeanVC2 为严格一致的 3 步推理！")
+          print("✓ 成功升级 MeanVC2 为 4 步高精度推理！")
           EOF
 
       - name: Install build tools
