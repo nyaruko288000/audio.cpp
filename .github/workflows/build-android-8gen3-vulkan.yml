@@ -150,24 +150,24 @@ jobs:
         with:
           ndk-version: r26d
 
-      - name: Install Complete Vulkan Headers to NDK
+      - name: Install Complete Vulkan & vk_video Headers to NDK
         run: |
           NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
           if [ -z "$NDK_PATH" ]; then
             NDK_PATH="$ANDROID_NDK_HOME"
           fi
     
-          TARGET_DIR="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan"
-          mkdir -p "$TARGET_DIR"
+          # 指向 NDK 的系统 include 根目录
+          SYSROOT_INC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
 
-          # 浅克隆官方完整的 Vulkan-Headers 仓库
           echo "Cloning KhronosGroup/Vulkan-Headers..."
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
 
-          # 将包含 C 和 C++ 的全套头文件统一复制到 NDK include 目录
-          cp -rf /tmp/vulkan-headers/include/vulkan/* "$TARGET_DIR/"
+          # 将 include 下的 vulkan/ 和 vk_video/ 完整同步过去
+          cp -rf /tmp/vulkan-headers/include/* "$SYSROOT_INC/"
     
-          echo "✓ All Vulkan C/C++ headers successfully installed to $TARGET_DIR"
+          echo "✓ Vulkan and vk_video headers successfully installed to $SYSROOT_INC"
+
 
       - name: Configure CMake for Snapdragon 8 Gen 3
         run: |
