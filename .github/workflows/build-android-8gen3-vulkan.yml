@@ -150,6 +150,25 @@ jobs:
         with:
           ndk-version: r26d
 
+      - name: Install Vulkan C++ Headers (vulkan.hpp) to NDK
+        run: |
+          NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
+          if [ -z "$NDK_PATH" ]; then
+            NDK_PATH="$ANDROID_NDK_HOME"
+          fi
+    
+          # 目标目录即 NDK 的标准头文件路径
+          TARGET_DIR="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan"
+          mkdir -p "$TARGET_DIR"
+    
+          # 从 Khronos 官方直接下载单一的 vulkan.hpp 头文件
+          echo "Downloading vulkan.hpp..."
+          curl -fsSL https://raw.githubusercontent.com/KhronosGroup/Vulkan-Hpp/main/vulkan/vulkan.hpp -o "$TARGET_DIR/vulkan.hpp"
+          curl -fsSL https://raw.githubusercontent.com/KhronosGroup/Vulkan-Hpp/main/vulkan/vulkan_raii.hpp -o "$TARGET_DIR/vulkan_raii.hpp"
+    
+          echo "✓ vulkan.hpp successfully installed to $TARGET_DIR"
+
+
       - name: Configure CMake for Snapdragon 8 Gen 3
         run: |
           NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
