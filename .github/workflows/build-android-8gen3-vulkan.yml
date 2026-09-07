@@ -150,24 +150,24 @@ jobs:
         with:
           ndk-version: r26d
 
-      - name: Install Vulkan C++ Headers (vulkan.hpp) to NDK
+      - name: Install Complete Vulkan Headers to NDK
         run: |
           NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
           if [ -z "$NDK_PATH" ]; then
             NDK_PATH="$ANDROID_NDK_HOME"
           fi
     
-          # 目标目录即 NDK 的标准头文件路径
           TARGET_DIR="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan"
           mkdir -p "$TARGET_DIR"
-    
-          # 从 Khronos 官方直接下载单一的 vulkan.hpp 头文件
-          echo "Downloading vulkan.hpp..."
-          curl -fsSL https://raw.githubusercontent.com/KhronosGroup/Vulkan-Hpp/main/vulkan/vulkan.hpp -o "$TARGET_DIR/vulkan.hpp"
-          curl -fsSL https://raw.githubusercontent.com/KhronosGroup/Vulkan-Hpp/main/vulkan/vulkan_raii.hpp -o "$TARGET_DIR/vulkan_raii.hpp"
-    
-          echo "✓ vulkan.hpp successfully installed to $TARGET_DIR"
 
+          # 浅克隆官方完整的 Vulkan-Headers 仓库
+          echo "Cloning KhronosGroup/Vulkan-Headers..."
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
+
+          # 将包含 C 和 C++ 的全套头文件统一复制到 NDK include 目录
+          cp -rf /tmp/vulkan-headers/include/vulkan/* "$TARGET_DIR/"
+    
+          echo "✓ All Vulkan C/C++ headers successfully installed to $TARGET_DIR"
 
       - name: Configure CMake for Snapdragon 8 Gen 3
         run: |
