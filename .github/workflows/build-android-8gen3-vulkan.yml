@@ -150,23 +150,26 @@ jobs:
         with:
           ndk-version: r26d
 
-      - name: Install Complete Vulkan & vk_video Headers to NDK
+      - name: Install Complete Vulkan & SPIRV Headers to NDK
         run: |
           NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
           if [ -z "$NDK_PATH" ]; then
             NDK_PATH="$ANDROID_NDK_HOME"
           fi
     
-          # 指向 NDK 的系统 include 根目录
           SYSROOT_INC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
 
-          echo "Cloning KhronosGroup/Vulkan-Headers..."
+          # 1. 注入 Vulkan-Headers (含 vulkan/ 与 vk_video/)
+          echo "Cloning Vulkan-Headers..."
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
-
-          # 将 include 下的 vulkan/ 和 vk_video/ 完整同步过去
           cp -rf /tmp/vulkan-headers/include/* "$SYSROOT_INC/"
+
+          # 2. 注入 SPIRV-Headers (含 spirv/unified1/spirv.hpp 等)
+          echo "Cloning SPIRV-Headers..."
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/spirv-headers
+          cp -rf /tmp/spirv-headers/include/* "$SYSROOT_INC/"
     
-          echo "✓ Vulkan and vk_video headers successfully installed to $SYSROOT_INC"
+          echo "✓ Vulkan and SPIR-V headers successfully installed to $SYSROOT_INC"
 
 
       - name: Configure CMake for Snapdragon 8 Gen 3
